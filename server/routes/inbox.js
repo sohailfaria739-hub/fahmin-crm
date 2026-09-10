@@ -1,6 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
-const db = require('../db');
+const { db } = require('../db');
 const { requireAuth } = require('../auth');
 
 const router = express.Router();
@@ -9,52 +9,125 @@ router.use(requireAuth);
 const uid = () => crypto.randomBytes(12).toString('hex');
 const nowISO = () => new Date().toISOString();
 
-const mapMessage = r => ({ id: r.id, contactId: r.contact_id, sender: r.sender, body: r.body, read: !!r.read, createdAt: r.created_at });
-
-// List one row per lead that has at least one message, newest activity first
-router.get('/conversations', (req, res) => {
-  const rows = db.prepare(`
-    SELECT c.id as contact_id, c.name as contact_name,
-           m.body as last_body, m.sender as last_sender, m.created_at as last_at,
-           (SELECT COUNT(*) FROM conversation_messages WHERE contact_id = c.id AND user_id = ? AND read = 0) as unread
-    FROM contacts c
-    JOIN conversation_messages m ON m.id = (
-      SELECT id FROM conversation_messages WHERE contact_id = c.id AND user_id = ? ORDER BY created_at DESC LIMIT 1
-    )
-    WHERE c.user_id = ?
-    ORDER BY m.created_at DESC
-  `).all(req.userId, req.userId, req.userId);
-  res.json(rows.map(r => ({
+const mapMessage = doc => {
+  const r = doc.data();
+  return {
+    id: doc.id,
     contactId: r.contact_id,
-    contactName: r.contact_name,
-    lastMessage: r.last_body,
-    lastSender: r.last_sender,
-    lastAt: r.last_at,
-    unread: r.unread,
-  })));
+    sender: r.sender,
+    body: r.body,
+    read: !!r.read,
+    createdAt: r.created_at
+  };
+};
+
+router.get('/conversations', async (req, res) => {
+  try {
+    const [contactsSnap, messagesSnap] = await Promise.all([
+      db.collection('contacts').where('user_id', '==', req.userId).get(),
+      db.collection('conversation_messages').where('user_id', '==', req.userId).get()
+    ]);
+
+    const contacts = contactsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const messages = messagesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    const contactMap = new Map(contacts.map(c => [c.id, c.name]));
+    const messagesByContact = {};
+
+    messages.forEach(m => {
+      if (!messagesByContact[m.contact_id]) {
+        messagesByContact[m.contact_id] = [];
+      }
+      messagesByContact[m.contact_id].push(m);
+    });
+
+    const conversations = [];
+    for (const [contactId, msgs] of Object.entries(messagesByContact)) {
+      if (!contactMap.has(contactId)) continue;
+      msgs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const lastMsg = msgs[0];
+      const unreadCount = msgs.filter(m => m.read === 0).length;
+
+      conversations.push({
+        contactId,
+        contactName: contactMap.get(contactId),
+        lastMessage: lastMsg.body,
+        lastSender: lastMsg.sender,
+        lastAt: lastMsg.created_at,
+        unread: unreadCount,
+      });
+    }
+
+    conversations.sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt));
+    res.json(conversations);
+  } catch (err) {
+    console.error('Get conversations error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-router.get('/conversations/:contactId', (req, res) => {
-  const contact = db.prepare('SELECT * FROM contacts WHERE id = ? AND user_id = ?').get(req.params.contactId, req.userId);
-  if (!contact) return res.status(404).json({ error: 'Lead not found' });
-  const rows = db.prepare('SELECT * FROM conversation_messages WHERE contact_id = ? AND user_id = ? ORDER BY created_at ASC').all(req.params.contactId, req.userId);
-  // Opening the thread marks incoming messages as read
-  db.prepare("UPDATE conversation_messages SET read = 1 WHERE contact_id = ? AND user_id = ? AND read = 0").run(req.params.contactId, req.userId);
-  res.json(rows.map(mapMessage));
+router.get('/conversations/:contactId', async (req, res) => {
+  try {
+    const contactDoc = await db.collection('contacts').doc(req.params.contactId).get();
+    if (!contactDoc.exists || contactDoc.data().user_id !== req.userId) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    const messagesSnap = await db.collection('conversation_messages')
+      .where('contact_id', '==', req.params.contactId)
+      .where('user_id', '==', req.userId)
+      .get();
+
+    const messages = messagesSnap.docs.map(mapMessage).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+    const batch = db.batch();
+    let hasUnread = false;
+    messagesSnap.docs.forEach(doc => {
+      if (doc.data().read === 0) {
+        batch.update(doc.ref, { read: 1 });
+        hasUnread = true;
+      }
+    });
+    if (hasUnread) {
+      await batch.commit();
+    }
+
+    res.json(messages);
+  } catch (err) {
+    console.error('Get conversation messages error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-router.post('/conversations/:contactId', (req, res) => {
-  const contact = db.prepare('SELECT * FROM contacts WHERE id = ? AND user_id = ?').get(req.params.contactId, req.userId);
-  if (!contact) return res.status(404).json({ error: 'Lead not found' });
-  const { body } = req.body || {};
-  if (!body || !body.trim()) return res.status(400).json({ error: 'Message body is required' });
-  const id = uid();
-  const created_at = nowISO();
-  db.prepare(
-    'INSERT INTO conversation_messages (id, user_id, contact_id, sender, body, read, created_at) VALUES (?,?,?,?,?,1,?)'
-  ).run(id, req.userId, req.params.contactId, 'agent', body.trim(), created_at);
-  const row = db.prepare('SELECT * FROM conversation_messages WHERE id = ?').get(id);
-  res.status(201).json(mapMessage(row));
+router.post('/conversations/:contactId', async (req, res) => {
+  try {
+    const contactDoc = await db.collection('contacts').doc(req.params.contactId).get();
+    if (!contactDoc.exists || contactDoc.data().user_id !== req.userId) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    const { body } = req.body || {};
+    if (!body || !body.trim()) return res.status(400).json({ error: 'Message body is required' });
+
+    const id = uid();
+    const created_at = nowISO();
+    const messageData = {
+      id,
+      user_id: req.userId,
+      contact_id: req.params.contactId,
+      sender: 'agent',
+      body: body.trim(),
+      read: 1,
+      created_at
+    };
+
+    await db.collection('conversation_messages').doc(id).set(messageData);
+    const newDoc = await db.collection('conversation_messages').doc(id).get();
+    res.status(201).json(mapMessage(newDoc));
+  } catch (err) {
+    console.error('Post message error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 module.exports = router;
