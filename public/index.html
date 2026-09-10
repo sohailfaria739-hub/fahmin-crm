@@ -1,0 +1,1708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fahmin · Real Estate CRM</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; }
+    html, body { height: 100%; }
+    body {
+      background: radial-gradient(1200px 800px at 15% -10%, #16382c 0%, #0b1512 45%, #070d0b 100%);
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+    }
+    #root { max-width: 1360px; margin: 0 auto; padding: 24px 16px; min-height: 100vh; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2c463c; border-radius: 8px; }
+    @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700;800&display=swap');
+    input:focus, select:focus, textarea:focus, button:focus { outline: none; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/plain" id="app-source">
+
+const { useState, useEffect, useRef, useMemo, useCallback, createContext, useContext } = React;
+
+// ─────────────────────────────────────────────────────────────
+//  THEME — "Midnight Emerald": deep charcoal-green with gold + jade accents
+// ─────────────────────────────────────────────────────────────
+const BG        = 'transparent';
+const SURFACE   = '#0f1a16';       // page/sidebar base
+const CARD      = '#132420';       // card surface
+const CARD_HI   = '#172b25';       // hovered/raised card
+const LINE      = '#213a32';       // hairline borders
+const INK       = '#eef4f0';       // primary text
+const SLATE     = '#93a89d';       // secondary text
+const MUTED     = '#5f766c';       // tertiary text
+
+const JADE       = '#2fd48f';      // primary accent
+const JADE_DARK  = '#1f9c6a';
+const JADE_LIGHT = '#153328';
+const GOLD       = '#e0b467';      // secondary accent
+const GOLD_DARK  = '#b8893c';
+const GOLD_LIGHT = '#2b2415';
+const RUST       = '#e2695a';
+const RUST_LIGHT = '#301c19';
+const SKY        = '#6fb3e0';
+const SKY_LIGHT  = '#182833';
+
+const LEAD_STATUSES = ['New', 'Contacted', 'Qualified', 'Nurturing', 'Lost'];
+const LEAD_STATUS_COLOR = {
+  New: { bg: GOLD_LIGHT, fg: GOLD },
+  Contacted: { bg: SKY_LIGHT, fg: SKY },
+  Qualified: { bg: JADE_LIGHT, fg: JADE },
+  Nurturing: { bg: '#221f2c', fg: '#a99adf' },
+  Lost: { bg: RUST_LIGHT, fg: RUST },
+};
+const PROPERTY_TYPES = ['House', 'Apartment', 'Plot', 'Commercial'];
+const PROPERTY_STATUSES = ['Available', 'Under Offer', 'Sold', 'Rented'];
+const PROPERTY_STATUS_COLOR = {
+  Available: { bg: JADE_LIGHT, fg: JADE },
+  'Under Offer': { bg: GOLD_LIGHT, fg: GOLD },
+  Sold: { bg: '#242424', fg: '#9a9a9a' },
+  Rented: { bg: SKY_LIGHT, fg: SKY },
+};
+const DEAL_STAGES = ['New Lead', 'Viewing', 'Offer Made', 'Negotiation', 'Closed Won', 'Closed Lost'];
+const SOURCES = ['Referral', 'Facebook', 'Instagram', 'Walk-in', 'Website', 'Phone Call', 'Email'];
+
+const money = (n) => (n ? 'PKR ' + Number(n).toLocaleString() : '—');
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const daysFrom = (iso) => {
+  if (!iso) return 0;
+  const d = new Date(iso + 'T00:00:00');
+  const t = new Date(todayISO() + 'T00:00:00');
+  return Math.round((d - t) / 86400000);
+};
+
+// ─────────────────────────────────────────────────────────────
+//  API CLIENT — talks to the real Express + SQLite backend
+// ─────────────────────────────────────────────────────────────
+const API_BASE = '/api';
+
+function apiRequest(path, { method = 'GET', body, token } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = 'Bearer ' + token;
+  return fetch(API_BASE + path, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  }).then(async (res) => {
+    let payload = null;
+    try { payload = await res.json(); } catch (e) {}
+    if (!res.ok) {
+      const message = (payload && payload.error) || `Request failed (${res.status})`;
+      throw new Error(message);
+    }
+    return payload;
+  });
+}
+
+const api = {
+  signup: (data) => apiRequest('/auth/signup', { method: 'POST', body: data }),
+  login: (data) => apiRequest('/auth/login', { method: 'POST', body: data }),
+  me: (token) => apiRequest('/auth/me', { token }),
+  all: (token) => apiRequest('/all', { token }),
+  createContact: (token, body) => apiRequest('/contacts', { method: 'POST', body, token }),
+  updateContact: (token, id, body) => apiRequest('/contacts/' + id, { method: 'PUT', body, token }),
+  deleteContact: (token, id) => apiRequest('/contacts/' + id, { method: 'DELETE', token }),
+  createProperty: (token, body) => apiRequest('/properties', { method: 'POST', body, token }),
+  updateProperty: (token, id, body) => apiRequest('/properties/' + id, { method: 'PUT', body, token }),
+  deleteProperty: (token, id) => apiRequest('/properties/' + id, { method: 'DELETE', token }),
+  createDeal: (token, body) => apiRequest('/deals', { method: 'POST', body, token }),
+  updateDeal: (token, id, body) => apiRequest('/deals/' + id, { method: 'PUT', body, token }),
+  deleteDeal: (token, id) => apiRequest('/deals/' + id, { method: 'DELETE', token }),
+  createTask: (token, body) => apiRequest('/tasks', { method: 'POST', body, token }),
+  updateTask: (token, id, body) => apiRequest('/tasks/' + id, { method: 'PUT', body, token }),
+  deleteTask: (token, id) => apiRequest('/tasks/' + id, { method: 'DELETE', token }),
+  activities: (token) => apiRequest('/activities', { token }),
+  markActivityRead: (token, id) => apiRequest('/activities/' + id + '/read', { method: 'PUT', token }),
+  markAllActivitiesRead: (token) => apiRequest('/activities/read-all', { method: 'PUT', token }),
+  deleteActivity: (token, id) => apiRequest('/activities/' + id, { method: 'DELETE', token }),
+  updateProfile: (token, body) => apiRequest('/auth/profile', { method: 'PUT', body, token }),
+  changePassword: (token, body) => apiRequest('/auth/password', { method: 'PUT', body, token }),
+  createCall: (token, body) => apiRequest('/calls', { method: 'POST', body, token }),
+  updateCall: (token, id, body) => apiRequest('/calls/' + id, { method: 'PUT', body, token }),
+  deleteCall: (token, id) => apiRequest('/calls/' + id, { method: 'DELETE', token }),
+  conversations: (token) => apiRequest('/conversations', { token }),
+  thread: (token, contactId) => apiRequest('/conversations/' + contactId, { token }),
+  sendMessage: (token, contactId, body) => apiRequest('/conversations/' + contactId, { method: 'POST', body, token }),
+  getSettings: (token) => apiRequest('/settings', { token }),
+  updateSettings: (token, body) => apiRequest('/settings', { method: 'PUT', body, token }),
+  askAssistant: (token, message) => apiRequest('/assistant/ask', { method: 'POST', body: { message }, token }),
+};
+
+const AuthContext = createContext(null);
+const useAuth = () => useContext(AuthContext);
+
+// ─────────────────────────────────────────────────────────────
+//  AUTH PROVIDER — persists session token in localStorage
+// ─────────────────────────────────────────────────────────────
+function AuthProvider({ children }) {
+  const [token, setToken] = useState(() => localStorage.getItem('fahmin_token'));
+  const [user, setUser] = useState(null);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    if (!token) { setChecking(false); return; }
+    api.me(token)
+      .then((res) => { setUser(res.user); setChecking(false); })
+      .catch(() => { localStorage.removeItem('fahmin_token'); setToken(null); setUser(null); setChecking(false); });
+  }, [token]);
+
+  const login = async (email, password) => {
+    const res = await api.login({ email, password });
+    localStorage.setItem('fahmin_token', res.token);
+    setToken(res.token);
+    setUser(res.user);
+  };
+  const signup = async (name, email, password, agency) => {
+    const res = await api.signup({ name, email, password, agency });
+    localStorage.setItem('fahmin_token', res.token);
+    setToken(res.token);
+    setUser(res.user);
+  };
+  const logout = () => {
+    localStorage.removeItem('fahmin_token');
+    setToken(null);
+    setUser(null);
+  };
+
+  return (
+    <AuthContext.Provider value={{ token, user, checking, login, signup, logout, setUser }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  BRAND MARK
+// ─────────────────────────────────────────────────────────────
+function FahminMark({ size = 22, color = JADE }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M9 3H15L18 13H15.5L13.5 5.5H10.5L8.5 13H6L9 3Z" fill={color} />
+      <path d="M6 13H18L20 21H4L6 13Z" fill={color} opacity="0.55" />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  AUTH SCREEN — sign in / sign up
+// ─────────────────────────────────────────────────────────────
+function AuthScreen() {
+  const { login, signup } = useAuth();
+  const [mode, setMode] = useState('login'); // 'login' | 'signup'
+  const [form, setForm] = useState({ name: '', email: '', password: '', agency: '' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!form.email || !form.password) return setError('Email and password are required.');
+    if (mode === 'signup' && !form.name.trim()) return setError('Please enter your full name.');
+    setLoading(true);
+    try {
+      if (mode === 'login') await login(form.email, form.password);
+      else await signup(form.name, form.email, form.password, form.agency);
+    } catch (err) {
+      setError(err.message || 'Something went wrong.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const authInput = {
+    width: '100%', boxSizing: 'border-box', border: `1px solid ${LINE}`, borderRadius: 10,
+    padding: '11px 13px', fontSize: 14, fontFamily: 'Inter, sans-serif', color: INK,
+    background: '#0c1613', outline: 'none', transition: '0.15s',
+  };
+  const authLabel = { fontSize: 12, fontWeight: 600, color: SLATE, marginBottom: 6, display: 'block' };
+
+  return (
+    <div style={{
+      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px 12px',
+    }}>
+      <div style={{
+        display: 'flex', width: '100%', maxWidth: 920, minHeight: 540, borderRadius: 20,
+        overflow: 'hidden', border: `1px solid ${LINE}`, boxShadow: '0 40px 100px rgba(0,0,0,0.45)',
+        animation: 'fadeUp 0.4s ease',
+      }}>
+        {/* Left — brand panel */}
+        <div style={{
+          flex: '1 1 40%', minWidth: 260, background: `linear-gradient(155deg, #123227 0%, #0a1a14 70%)`,
+          padding: '40px 34px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+          position: 'relative', overflow: 'hidden',
+        }}>
+          <div style={{ position: 'absolute', top: -60, right: -60, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(47,212,143,0.16), transparent 70%)' }} />
+          <div style={{ position: 'absolute', bottom: -80, left: -40, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(224,180,103,0.12), transparent 70%)' }} />
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <FahminMark size={26} />
+              <span style={{ fontFamily: 'Fraunces, serif', color: '#F6F3EC', fontSize: 21, fontWeight: 600 }}>Fahmin</span>
+            </div>
+            <div style={{ fontSize: 12, color: SLATE, marginTop: 4, letterSpacing: 0.4, textTransform: 'uppercase' }}>Real Estate CRM</div>
+          </div>
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            <div style={{ fontFamily: 'Fraunces, serif', fontSize: 27, lineHeight: 1.25, color: '#F6F3EC', fontWeight: 500 }}>
+              Every lead, listing, and deal — in one command center.
+            </div>
+            <p style={{ color: SLATE, fontSize: 13.5, marginTop: 14, lineHeight: 1.6 }}>
+              Track your pipeline from first call to closed deal, manage your listings, and never miss a follow-up.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 18, position: 'relative', zIndex: 1 }}>
+            <div><div style={{ color: JADE, fontFamily: 'Fraunces, serif', fontSize: 20, fontWeight: 600 }}>Pipeline</div><div style={{ color: MUTED, fontSize: 11 }}>Kanban deal tracking</div></div>
+            <div><div style={{ color: GOLD, fontFamily: 'Fraunces, serif', fontSize: 20, fontWeight: 600 }}>Listings</div><div style={{ color: MUTED, fontSize: 11 }}>Property management</div></div>
+          </div>
+        </div>
+
+        {/* Right — form panel */}
+        <div style={{ flex: '1 1 60%', background: SURFACE, padding: '40px 40px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <div style={{ maxWidth: 340, margin: '0 auto', width: '100%' }}>
+            <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 26, fontWeight: 600, color: INK, marginBottom: 4 }}>
+              {mode === 'login' ? 'Welcome back' : 'Create your account'}
+            </h1>
+            <p style={{ color: SLATE, fontSize: 13, marginBottom: 24 }}>
+              {mode === 'login' ? 'Sign in to your Fahmin workspace.' : 'Set up your CRM workspace in seconds.'}
+            </p>
+
+            <form onSubmit={submit}>
+              {mode === 'signup' && (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={authLabel}>Full name</label>
+                  <input style={authInput} value={form.name} onChange={set('name')} placeholder="e.g. Zohaib Ahmed" autoComplete="name" />
+                </div>
+              )}
+              <div style={{ marginBottom: 14 }}>
+                <label style={authLabel}>Email</label>
+                <input style={authInput} type="email" value={form.email} onChange={set('email')} placeholder="you@agency.com" autoComplete="email" />
+              </div>
+              {mode === 'signup' && (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={authLabel}>Agency (optional)</label>
+                  <input style={authInput} value={form.agency} onChange={set('agency')} placeholder="e.g. Fahmin Realty" />
+                </div>
+              )}
+              <div style={{ marginBottom: 6 }}>
+                <label style={authLabel}>Password</label>
+                <input style={authInput} type="password" value={form.password} onChange={set('password')} placeholder="••••••••" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
+              </div>
+              {mode === 'signup' && <div style={{ fontSize: 11, color: MUTED, marginBottom: 14 }}>At least 6 characters.</div>}
+              {error && (
+                <div style={{ background: RUST_LIGHT, color: RUST, fontSize: 12.5, borderRadius: 8, padding: '9px 12px', margin: '10px 0' }}>{error}</div>
+              )}
+              <button type="submit" disabled={loading} style={{
+                width: '100%', marginTop: 12, background: `linear-gradient(135deg, ${JADE}, ${JADE_DARK})`,
+                color: '#08150f', border: 'none', borderRadius: 10, padding: '12px 16px', fontSize: 14,
+                fontWeight: 700, cursor: loading ? 'default' : 'pointer', opacity: loading ? 0.7 : 1,
+                fontFamily: 'Inter, sans-serif', boxShadow: `0 10px 24px rgba(47,212,143,0.25)`,
+              }}>
+                {loading ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}
+              </button>
+            </form>
+
+            <div style={{ textAlign: 'center', marginTop: 20, fontSize: 13, color: SLATE }}>
+              {mode === 'login' ? (
+                <span>New to Fahmin? <button onClick={() => { setMode('signup'); setError(''); }} style={{ background: 'none', border: 'none', color: GOLD, fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>Create an account</button></span>
+              ) : (
+                <span>Already have an account? <button onClick={() => { setMode('login'); setError(''); }} style={{ background: 'none', border: 'none', color: GOLD, fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>Sign in</button></span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  UI PRIMITIVES
+// ─────────────────────────────────────────────────────────────
+function Badge({ text, bg, fg }) {
+  return <span style={{ background: bg, color: fg, fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 999, whiteSpace: 'nowrap' }}>{text}</span>;
+}
+
+const IconBtn = ({ onClick, title, children, danger }) => (
+  <button onClick={onClick} title={title} style={{ border: `1px solid ${LINE}`, background: CARD, borderRadius: 7, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: danger ? RUST : SLATE, transition: '0.12s' }}>
+    {children}
+  </button>
+);
+
+const PrimaryBtn = ({ onClick, children, style, disabled }) => (
+  <button onClick={onClick} disabled={disabled} style={{
+    background: `linear-gradient(135deg, ${JADE}, ${JADE_DARK})`, color: '#08150f', border: 'none', borderRadius: 9,
+    padding: '9px 16px', fontSize: 13, fontWeight: 700, cursor: disabled ? 'default' : 'pointer',
+    display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'Inter, sans-serif', transition: '0.15s',
+    opacity: disabled ? 0.6 : 1, boxShadow: `0 6px 16px rgba(47,212,143,0.18)`, ...style,
+  }}>
+    {children}
+  </button>
+);
+
+const GhostBtn = ({ onClick, children, style }) => (
+  <button onClick={onClick} style={{ border: `1px solid ${LINE}`, background: CARD, color: INK, borderRadius: 8, padding: '8px 14px', fontWeight: 600, fontSize: 13, cursor: 'pointer', fontFamily: 'Inter, sans-serif', ...style }}>
+    {children}
+  </button>
+);
+
+const Field = ({ label, children }) => (
+  <label style={{ display: 'block', marginBottom: 12 }}>
+    <div style={{ fontSize: 12, fontWeight: 600, color: SLATE, marginBottom: 4 }}>{label}</div>
+    {children}
+  </label>
+);
+
+const inputStyle = {
+  width: '100%', boxSizing: 'border-box', border: `1px solid ${LINE}`, borderRadius: 8,
+  padding: '8px 11px', fontSize: 13.5, fontFamily: 'Inter, sans-serif', color: INK, background: '#0c1613',
+  outline: 'none', transition: '0.1s',
+};
+
+function Modal({ title, onClose, children, wide }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(4,10,8,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 20 }} onClick={onClose}>
+      <div style={{ background: CARD, borderRadius: 14, width: wide ? 600 : 440, maxWidth: '100%', maxHeight: '88vh', overflowY: 'auto', border: `1px solid ${LINE}`, boxShadow: '0 24px 70px rgba(0,0,0,0.5)' }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 22px', borderBottom: `1px solid ${LINE}` }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 19, fontWeight: 600, color: INK }}>{title}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: SLATE, padding: 4, fontSize: 20 }}>✕</button>
+        </div>
+        <div style={{ padding: 22 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, sub, accent }) {
+  return (
+    <div style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: '14px 16px', flex: 1, minWidth: 130 }}>
+      <div style={{ fontSize: 11.5, color: SLATE, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</div>
+      <div style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: accent || INK, marginTop: 2 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: SLATE, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Toast({ message, kind, onClose }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 3200);
+    return () => clearTimeout(t);
+  }, [message]);
+  if (!message) return null;
+  const color = kind === 'error' ? RUST : JADE;
+  const bg = kind === 'error' ? RUST_LIGHT : JADE_LIGHT;
+  return (
+    <div style={{
+      position: 'fixed', bottom: 20, right: 20, background: bg, color, border: `1px solid ${color}33`,
+      padding: '11px 16px', borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 100,
+      boxShadow: '0 12px 30px rgba(0,0,0,0.35)', animation: 'fadeUp 0.25s ease', maxWidth: 320,
+    }}>
+      {message}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SIDEBAR
+// ─────────────────────────────────────────────────────────────
+const NAV_GROUPS = [
+  {
+    label: 'Main Menu',
+    items: [
+      {
+        id: 'dashboard', label: 'Dashboard', icon: '📊',
+        children: [
+          { id: 'dashboard', label: 'Overview' },
+          { id: 'analytics', label: 'Analytics' },
+        ],
+      },
+      { id: 'tasks', label: 'Tasks', icon: '✅' },
+      { id: 'messages', label: 'Messages', icon: '💬', badgeKey: 'messages' },
+    ],
+  },
+  {
+    label: 'CRM',
+    items: [
+      { id: 'leads', label: 'Leads', icon: '👤' },
+      { id: 'properties', label: 'Properties', icon: '🏠' },
+      { id: 'pipeline', label: 'Pipeline', icon: '📌' },
+    ],
+  },
+  {
+    label: 'Communications',
+    items: [
+      { id: 'inbox', label: 'Inbox', icon: '📥', badgeKey: 'inbox' },
+      { id: 'calls', label: 'Calls', icon: '📞' },
+      { id: 'assistant', label: 'AI Assistant', icon: '✨' },
+    ],
+  },
+  {
+    label: 'Workspace',
+    items: [
+      { id: 'settings', label: 'Settings', icon: '⚙️' },
+    ],
+  },
+];
+
+function Sidebar({ view, setView, unreadCount, inboxUnread }) {
+  const badges = { messages: unreadCount, inbox: inboxUnread };
+  const { user, logout } = useAuth();
+
+  // Which parent items (with children) are expanded. A parent auto-opens
+  // whenever the active view belongs to one of its children.
+  const [openIds, setOpenIds] = useState(() => {
+    const initial = {};
+    NAV_GROUPS.forEach((g) => g.items.forEach((it) => {
+      if (it.children && it.children.some((c) => c.id === view)) initial[it.id] = true;
+    }));
+    return initial;
+  });
+
+  useEffect(() => {
+    NAV_GROUPS.forEach((g) => g.items.forEach((it) => {
+      if (it.children && it.children.some((c) => c.id === view)) {
+        setOpenIds((prev) => (prev[it.id] ? prev : { ...prev, [it.id]: true }));
+      }
+    }));
+  }, [view]);
+
+  const toggle = (id) => setOpenIds((prev) => ({ ...prev, [id]: !prev[id] }));
+
+  const initials = (user?.name || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
+  return (
+    <div style={{ width: 220, background: SURFACE, minHeight: '100%', padding: '22px 12px', boxSizing: 'border-box', flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: `1px solid ${LINE}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px 24px 8px' }}>
+        <FahminMark size={24} />
+        <span style={{ fontFamily: 'Fraunces, serif', color: '#F6F3EC', fontSize: 18, fontWeight: 600, letterSpacing: 0.2 }}>Fahmin</span>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {NAV_GROUPS.map((group, gi) => (
+          <div key={group.label} style={{ marginBottom: 14 }}>
+            <div style={{
+              fontSize: 10.5, fontWeight: 700, color: MUTED, letterSpacing: 0.8, textTransform: 'uppercase',
+              padding: '0 11px', marginBottom: 6, marginTop: gi === 0 ? 0 : 6,
+            }}>
+              {group.label}
+            </div>
+            {group.items.map((it) => {
+              const hasChildren = !!it.children;
+              const childActive = hasChildren && it.children.some((c) => c.id === view);
+              const active = view === it.id || childActive;
+              const isOpen = hasChildren && !!openIds[it.id];
+              const badge = it.badgeKey ? (badges[it.badgeKey] || 0) : 0;
+              return (
+                <div key={it.id}>
+                  <button
+                    onClick={() => (hasChildren ? toggle(it.id) : setView(it.id))}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                      background: active ? JADE_LIGHT : 'transparent',
+                      color: active ? JADE : '#9fb0a8',
+                      border: 'none', borderRadius: 8, padding: '10px 11px', marginBottom: 2,
+                      fontSize: 13.5, fontWeight: 500, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+                      borderLeft: active ? `2.5px solid ${JADE}` : '2.5px solid transparent',
+                      transition: '0.12s',
+                    }}
+                  >
+                    <span style={{ fontSize: 16 }}>{it.icon}</span>
+                    <span style={{ flex: 1 }}>{it.label}</span>
+                    {!!badge && (
+                      <span style={{ background: RUST, color: '#fff', fontSize: 10, fontWeight: 700, borderRadius: 999, minWidth: 17, height: 17, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px' }}>
+                        {badge > 9 ? '9+' : badge}
+                      </span>
+                    )}
+                    {hasChildren && (
+                      <span style={{
+                        fontSize: 11, color: active ? JADE : MUTED, transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+                        transition: 'transform 0.15s ease', display: 'inline-block',
+                      }}>
+                        ›
+                      </span>
+                    )}
+                  </button>
+                  {hasChildren && isOpen && (
+                    <div style={{ margin: '2px 0 4px 20px', borderLeft: `1px solid ${LINE}`, paddingLeft: 12 }}>
+                      {it.children.map((c) => {
+                        const cActive = view === c.id;
+                        return (
+                          <button key={c.id} onClick={() => setView(c.id)} style={{
+                            display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+                            background: 'transparent', color: cActive ? JADE : '#8a9c93',
+                            border: 'none', padding: '7px 8px', marginBottom: 1, borderRadius: 6,
+                            fontSize: 12.5, fontWeight: cActive ? 600 : 500, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+                          }}>
+                            <span style={{
+                              width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
+                              background: cActive ? JADE : '#4c5f56',
+                            }} />
+                            <span>{c.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <button onClick={() => setView('profile')} style={{
+        borderTop: `1px solid ${LINE}`, paddingTop: 12, display: 'flex', alignItems: 'center', gap: 9,
+        background: 'none', borderLeft: 'none', borderRight: 'none', borderBottom: 'none', cursor: 'pointer', textAlign: 'left', width: '100%',
+      }}>
+        <div style={{ width: 32, height: 32, borderRadius: '50%', background: `linear-gradient(135deg, ${GOLD}, ${GOLD_DARK})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#1a1305', flexShrink: 0 }}>
+          {initials}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: view === 'profile' ? JADE : INK, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user?.name}</div>
+          <div style={{ fontSize: 10.5, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user?.email}</div>
+        </div>
+        <span onClick={(e) => { e.stopPropagation(); logout(); }} title="Sign out" style={{ color: SLATE, cursor: 'pointer', fontSize: 15, padding: 4 }}>⏻</span>
+      </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  DASHBOARD
+// ─────────────────────────────────────────────────────────────
+function Dashboard({ data, setView }) {
+  const { user } = useAuth();
+  const activeDeals = data.deals.filter(d => d.stage !== 'Closed Won' && d.stage !== 'Closed Lost');
+  const closedWonValue = data.deals.filter(d => d.stage === 'Closed Won').reduce((s, d) => s + Number(d.value || 0), 0);
+  const pendingTasks = data.tasks.filter(t => !t.done);
+  const contactName = (id) => data.contacts.find(c => c.id === id)?.name || '—';
+  const recentLeads = [...data.contacts].slice(-5).reverse();
+  const firstName = (user?.name || '').split(' ')[0];
+
+  return (
+    <div>
+      <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 26, fontWeight: 600, color: INK, margin: '0 0 2px' }}>Welcome back{firstName ? ', ' + firstName : ''}</h1>
+      <p style={{ color: SLATE, fontSize: 13.5, margin: '0 0 20px' }}>Your real estate command center.</p>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 22, flexWrap: 'wrap' }}>
+        <StatCard label="Total leads" value={data.contacts.length} />
+        <StatCard label="Active deals" value={activeDeals.length} accent={SKY} />
+        <StatCard label="Closed won" value={money(closedWonValue)} accent={JADE} />
+        <StatCard label="Listings" value={data.properties.filter(p => p.status === 'Available').length} accent={GOLD} />
+        <StatCard label="Pending tasks" value={pendingTasks.length} accent={RUST} />
+      </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 300px', background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, color: INK }}>Recent leads</div>
+            <button onClick={() => setView('leads')} style={{ background: 'none', border: 'none', color: GOLD, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>View all</button>
+          </div>
+          {recentLeads.length === 0 && <div style={{ fontSize: 12.5, color: MUTED, padding: '6px 0' }}>No leads yet.</div>}
+          {recentLeads.map(c => (
+            <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderTop: `1px solid ${LINE}` }}>
+              <div><div style={{ fontSize: 13, fontWeight: 600, color: INK }}>{c.name}</div><div style={{ fontSize: 11, color: SLATE }}>{c.source}</div></div>
+              <Badge text={c.status} bg={LEAD_STATUS_COLOR[c.status].bg} fg={LEAD_STATUS_COLOR[c.status].fg} />
+            </div>
+          ))}
+        </div>
+        <div style={{ flex: '1 1 300px', background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, color: INK }}>Upcoming tasks</div>
+            <button onClick={() => setView('tasks')} style={{ background: 'none', border: 'none', color: GOLD, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>View all</button>
+          </div>
+          {pendingTasks.length === 0 && <div style={{ fontSize: 12.5, color: MUTED, padding: '6px 0' }}>All caught up 🎉</div>}
+          {pendingTasks.slice(0, 4).map(t => {
+            const d = daysFrom(t.dueDate);
+            return (
+              <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderTop: `1px solid ${LINE}` }}>
+                <div><div style={{ fontSize: 13, fontWeight: 600, color: INK }}>{t.title}</div><div style={{ fontSize: 11, color: SLATE }}>{contactName(t.contactId)}</div></div>
+                <span style={{ fontSize: 11, fontWeight: 600, color: d < 0 ? RUST : d === 0 ? GOLD : SLATE }}>{d < 0 ? `${Math.abs(d)}d overdue` : d === 0 ? 'Today' : `in ${d}d`}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  LEADS
+// ─────────────────────────────────────────────────────────────
+function Leads({ data, actions }) {
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [modal, setModal] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const filtered = data.contacts.filter(c => {
+    const q = query.toLowerCase();
+    return (!q || c.name.toLowerCase().includes(q) || (c.phone || '').includes(q) || (c.email || '').toLowerCase().includes(q)) &&
+           (statusFilter === 'All' || c.status === statusFilter);
+  });
+
+  const saveLead = async (f) => {
+    setSaving(true);
+    try {
+      if (modal.editing) await actions.updateContact(modal.editing.id, f);
+      else await actions.createContact(f);
+      setModal(null);
+    } finally { setSaving(false); }
+  };
+  const removeLead = (id) => actions.deleteContact(id);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
+        <div><h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 2px' }}>Leads</h1><p style={{ color: SLATE, fontSize: 13, margin: 0 }}>{data.contacts.length} contacts</p></div>
+        <PrimaryBtn onClick={() => setModal({ editing: null })}>➕ Add lead</PrimaryBtn>
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 200px' }}><input style={inputStyle} placeholder="Search…" value={query} onChange={e => setQuery(e.target.value)} /></div>
+        <select style={{ ...inputStyle, width: 140 }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>All</option>{LEAD_STATUSES.map(s => <option key={s}>{s}</option>)}</select>
+      </div>
+      <div style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, overflow: 'hidden' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1.2fr 1fr 1fr 0.7fr', padding: '8px 14px', background: CARD_HI, fontSize: 11, fontWeight: 700, color: SLATE, textTransform: 'uppercase' }}>
+          <div>Name</div><div>Contact</div><div>Status</div><div>Budget</div><div style={{ textAlign: 'right' }}>Actions</div>
+        </div>
+        {filtered.length === 0 && <div style={{ padding: 20, color: MUTED, fontSize: 13 }}>No leads match.</div>}
+        {filtered.map(c => (
+          <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '1.6fr 1.2fr 1fr 1fr 0.7fr', padding: '10px 14px', borderTop: `1px solid ${LINE}`, alignItems: 'center' }}>
+            <div><div style={{ fontWeight: 600, fontSize: 13, color: INK }}>{c.name}</div><div style={{ fontSize: 11, color: SLATE }}>{c.source}</div></div>
+            <div style={{ fontSize: 12, color: SLATE }}><div>{c.phone}</div><div style={{ fontSize: 11 }}>{c.email}</div></div>
+            <div><Badge text={c.status} bg={LEAD_STATUS_COLOR[c.status].bg} fg={LEAD_STATUS_COLOR[c.status].fg} /></div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>{c.budget ? money(c.budget) : '—'}</div>
+            <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+              <IconBtn title="Edit" onClick={() => setModal({ editing: c })}>✏️</IconBtn>
+              <IconBtn title="Delete" danger onClick={() => removeLead(c.id)}>🗑️</IconBtn>
+            </div>
+          </div>
+        ))}
+      </div>
+      {modal && <Modal title={modal.editing ? 'Edit lead' : 'Add lead'} onClose={() => setModal(null)}>
+        <LeadForm initial={modal.editing} onSave={saveLead} onCancel={() => setModal(null)} saving={saving} />
+      </Modal>}
+    </div>
+  );
+}
+function LeadForm({ initial, onSave, onCancel, saving }) {
+  const [f, setF] = useState(initial || { name: '', phone: '', email: '', status: 'New', budget: '', source: '', notes: '' });
+  const set = k => e => setF({ ...f, [k]: e.target.value });
+  return (
+    <div>
+      <Field label="Full name"><input style={inputStyle} value={f.name} onChange={set('name')} placeholder="e.g. Amina Sheikh" /></Field>
+      <div style={{ display: 'flex', gap: 10 }}><div style={{ flex: 1 }}><Field label="Phone"><input style={inputStyle} value={f.phone} onChange={set('phone')} /></Field></div><div style={{ flex: 1 }}><Field label="Email"><input style={inputStyle} value={f.email} onChange={set('email')} /></Field></div></div>
+      <div style={{ display: 'flex', gap: 10 }}><div style={{ flex: 1 }}><Field label="Status"><select style={inputStyle} value={f.status} onChange={set('status')}>{LEAD_STATUSES.map(s => <option key={s}>{s}</option>)}</select></Field></div><div style={{ flex: 1 }}><Field label="Budget (PKR)"><input type="number" style={inputStyle} value={f.budget} onChange={set('budget')} /></Field></div></div>
+      <Field label="Source"><select style={inputStyle} value={f.source} onChange={set('source')}><option value="">Select</option>{SOURCES.map(s => <option key={s}>{s}</option>)}</select></Field>
+      <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 60 }} value={f.notes} onChange={set('notes')} /></Field>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}><GhostBtn onClick={onCancel}>Cancel</GhostBtn><PrimaryBtn disabled={saving} onClick={() => f.name.trim() && onSave(f)}>{saving ? 'Saving…' : 'Save'}</PrimaryBtn></div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PROPERTIES
+// ─────────────────────────────────────────────────────────────
+function Properties({ data, actions }) {
+  const [query, setQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('All');
+  const [modal, setModal] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const filtered = data.properties.filter(p => {
+    const q = query.toLowerCase();
+    return (!q || p.title.toLowerCase().includes(q) || (p.address || '').toLowerCase().includes(q)) && (typeFilter === 'All' || p.type === typeFilter);
+  });
+  const saveProperty = async (f) => {
+    setSaving(true);
+    try {
+      if (modal.editing) await actions.updateProperty(modal.editing.id, f);
+      else await actions.createProperty(f);
+      setModal(null);
+    } finally { setSaving(false); }
+  };
+  const removeProperty = (id) => actions.deleteProperty(id);
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
+        <div><h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 2px' }}>Properties</h1><p style={{ color: SLATE, fontSize: 13, margin: 0 }}>{data.properties.length} listings</p></div>
+        <PrimaryBtn onClick={() => setModal({ editing: null })}>➕ Add listing</PrimaryBtn>
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 200px' }}><input style={inputStyle} placeholder="Search…" value={query} onChange={e => setQuery(e.target.value)} /></div>
+        <select style={{ ...inputStyle, width: 140 }} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}><option>All</option>{PROPERTY_TYPES.map(t => <option key={t}>{t}</option>)}</select>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14 }}>
+        {filtered.length === 0 && <div style={{ color: MUTED, fontSize: 13 }}>No listings match.</div>}
+        {filtered.map(p => (
+          <div key={p.id} style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}><Badge text={p.status} bg={PROPERTY_STATUS_COLOR[p.status].bg} fg={PROPERTY_STATUS_COLOR[p.status].fg} /><span style={{ fontSize: 12, color: SLATE }}>{p.type}</span></div>
+            <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, margin: '4px 0 2px', color: INK }}>{p.title}</div>
+            <div style={{ fontSize: 12, color: SLATE, marginBottom: 6 }}>📍 {p.address}</div>
+            <div style={{ fontFamily: 'Fraunces, serif', fontSize: 18, fontWeight: 600, color: GOLD }}>{money(p.price)}</div>
+            <div style={{ display: 'flex', gap: 12, fontSize: 12, color: SLATE, margin: '6px 0 10px' }}>
+              {p.type !== 'Plot' && p.type !== 'Commercial' && <span>🛏 {p.beds || 0}  🛁 {p.baths || 0}</span>}
+              <span>📐 {p.area || '—'}</span>
+            </div>
+            <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', borderTop: `1px solid ${LINE}`, paddingTop: 8 }}>
+              <IconBtn title="Edit" onClick={() => setModal({ editing: p })}>✏️</IconBtn>
+              <IconBtn title="Delete" danger onClick={() => removeProperty(p.id)}>🗑️</IconBtn>
+            </div>
+          </div>
+        ))}
+      </div>
+      {modal && <Modal title={modal.editing ? 'Edit listing' : 'Add listing'} onClose={() => setModal(null)} wide>
+        <PropertyForm initial={modal.editing} onSave={saveProperty} onCancel={() => setModal(null)} saving={saving} />
+      </Modal>}
+    </div>
+  );
+}
+function PropertyForm({ initial, onSave, onCancel, saving }) {
+  const [f, setF] = useState(initial || { title: '', address: '', type: 'House', price: '', status: 'Available', beds: '', baths: '', area: '', notes: '' });
+  const set = k => e => setF({ ...f, [k]: e.target.value });
+  return (
+    <div>
+      <Field label="Title"><input style={inputStyle} value={f.title} onChange={set('title')} /></Field>
+      <Field label="Address"><input style={inputStyle} value={f.address} onChange={set('address')} /></Field>
+      <div style={{ display: 'flex', gap: 10 }}><div style={{ flex: 1 }}><Field label="Type"><select style={inputStyle} value={f.type} onChange={set('type')}>{PROPERTY_TYPES.map(t => <option key={t}>{t}</option>)}</select></Field></div><div style={{ flex: 1 }}><Field label="Status"><select style={inputStyle} value={f.status} onChange={set('status')}>{PROPERTY_STATUSES.map(s => <option key={s}>{s}</option>)}</select></Field></div></div>
+      <Field label="Price (PKR)"><input type="number" style={inputStyle} value={f.price} onChange={set('price')} /></Field>
+      <div style={{ display: 'flex', gap: 10 }}><div style={{ flex: 1 }}><Field label="Beds"><input type="number" style={inputStyle} value={f.beds} onChange={set('beds')} /></Field></div><div style={{ flex: 1 }}><Field label="Baths"><input type="number" style={inputStyle} value={f.baths} onChange={set('baths')} /></Field></div><div style={{ flex: 1 }}><Field label="Area"><input style={inputStyle} value={f.area} onChange={set('area')} placeholder="1 Kanal" /></Field></div></div>
+      <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 50 }} value={f.notes} onChange={set('notes')} /></Field>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}><GhostBtn onClick={onCancel}>Cancel</GhostBtn><PrimaryBtn disabled={saving} onClick={() => f.title.trim() && onSave(f)}>{saving ? 'Saving…' : 'Save'}</PrimaryBtn></div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PIPELINE
+// ─────────────────────────────────────────────────────────────
+function Pipeline({ data, actions }) {
+  const [modal, setModal] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const contactName = id => data.contacts.find(c => c.id === id)?.name || 'Unknown';
+  const propertyTitle = id => data.properties.find(p => p.id === id)?.title || 'Unknown';
+  const saveDeal = async (f) => {
+    setSaving(true);
+    try {
+      if (modal.editing) await actions.updateDeal(modal.editing.id, f);
+      else await actions.createDeal(f);
+      setModal(null);
+    } finally { setSaving(false); }
+  };
+  const removeDeal = (id) => actions.deleteDeal(id);
+  const setStage = (id, stage) => actions.updateDeal(id, { stage });
+  if (data.contacts.length === 0 || data.properties.length === 0) return <div><h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, color: INK }}>Pipeline</h1><p style={{ color: SLATE }}>Add leads and listings first.</p></div>;
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
+        <div><h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 2px' }}>Pipeline</h1><p style={{ color: SLATE, fontSize: 13, margin: 0 }}>{data.deals.length} deals</p></div>
+        <PrimaryBtn onClick={() => setModal({ editing: null })}>➕ New deal</PrimaryBtn>
+      </div>
+      <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8 }}>
+        {DEAL_STAGES.map(stage => {
+          const stageDeals = data.deals.filter(d => d.stage === stage);
+          return (
+            <div key={stage} style={{ minWidth: 220, flex: '0 0 220px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}><span style={{ width: 8, height: 8, borderRadius: 8, background: stage === 'Closed Won' ? JADE : stage === 'Closed Lost' ? RUST : GOLD }}></span><div style={{ fontFamily: 'Fraunces, serif', fontSize: 14, fontWeight: 600, color: INK }}>{stage}</div><span style={{ fontSize: 11, color: SLATE }}>({stageDeals.length})</span></div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {stageDeals.map(d => (
+                  <div key={d.id} style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 10, padding: 12 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: INK }}>{contactName(d.contactId)}</div>
+                    <div style={{ fontSize: 11, color: SLATE, marginBottom: 4 }}>{propertyTitle(d.propertyId)}</div>
+                    <div style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 600, color: GOLD }}>{money(d.value)}</div>
+                    <select value={d.stage} onChange={e => setStage(d.id, e.target.value)} style={{ ...inputStyle, fontSize: 11, padding: '4px 6px', margin: '6px 0' }}>{DEAL_STAGES.map(s => <option key={s}>{s}</option>)}</select>
+                    <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}><IconBtn title="Edit" onClick={() => setModal({ editing: d })}>✏️</IconBtn><IconBtn title="Delete" danger onClick={() => removeDeal(d.id)}>🗑️</IconBtn></div>
+                  </div>
+                ))}
+                {stageDeals.length === 0 && <div style={{ fontSize: 11, color: MUTED, padding: '4px 2px' }}>—</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {modal && <Modal title={modal.editing ? 'Edit deal' : 'New deal'} onClose={() => setModal(null)}>
+        <DealForm data={data} initial={modal.editing} onSave={saveDeal} onCancel={() => setModal(null)} saving={saving} />
+      </Modal>}
+    </div>
+  );
+}
+function DealForm({ data, initial, onSave, onCancel, saving }) {
+  const [f, setF] = useState(initial || { contactId: data.contacts[0]?.id || '', propertyId: data.properties[0]?.id || '', stage: 'New Lead', value: '', notes: '' });
+  const set = k => e => setF({ ...f, [k]: e.target.value });
+  return (
+    <div>
+      <Field label="Contact"><select style={inputStyle} value={f.contactId} onChange={set('contactId')}>{data.contacts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
+      <Field label="Property"><select style={inputStyle} value={f.propertyId} onChange={set('propertyId')}>{data.properties.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}</select></Field>
+      <div style={{ display: 'flex', gap: 10 }}><div style={{ flex: 1 }}><Field label="Stage"><select style={inputStyle} value={f.stage} onChange={set('stage')}>{DEAL_STAGES.map(s => <option key={s}>{s}</option>)}</select></Field></div><div style={{ flex: 1 }}><Field label="Value (PKR)"><input type="number" style={inputStyle} value={f.value} onChange={set('value')} /></Field></div></div>
+      <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 50 }} value={f.notes} onChange={set('notes')} /></Field>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}><GhostBtn onClick={onCancel}>Cancel</GhostBtn><PrimaryBtn disabled={saving} onClick={() => f.contactId && f.propertyId && onSave(f)}>{saving ? 'Saving…' : 'Save'}</PrimaryBtn></div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TASKS
+// ─────────────────────────────────────────────────────────────
+function Tasks({ data, actions }) {
+  const [modal, setModal] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const contactName = id => data.contacts.find(c => c.id === id)?.name;
+  const saveTask = async (f) => {
+    setSaving(true);
+    try {
+      if (modal.editing) await actions.updateTask(modal.editing.id, f);
+      else await actions.createTask(f);
+      setModal(null);
+    } finally { setSaving(false); }
+  };
+  const toggleDone = (t) => actions.updateTask(t.id, { done: !t.done });
+  const removeTask = (id) => actions.deleteTask(id);
+  const pending = data.tasks.filter(t => !t.done).sort((a,b) => (a.dueDate||'').localeCompare(b.dueDate||''));
+  const done = data.tasks.filter(t => t.done);
+  const Row = ({ t }) => {
+    const d = daysFrom(t.dueDate);
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderTop: `1px solid ${LINE}` }}>
+        <button onClick={() => toggleDone(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18 }}>{t.done ? '✅' : '⬜'}</button>
+        <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, textDecoration: t.done ? 'line-through' : 'none', color: t.done ? SLATE : INK }}>{t.title}</div>{contactName(t.contactId) && <div style={{ fontSize: 11, color: SLATE }}>{contactName(t.contactId)}</div>}</div>
+        {!t.done && t.dueDate && <span style={{ fontSize: 11, fontWeight: 600, color: d < 0 ? RUST : d === 0 ? GOLD : SLATE }}>{d < 0 ? `${Math.abs(d)}d overdue` : d === 0 ? 'Today' : t.dueDate}</span>}
+        <div style={{ display: 'flex', gap: 4 }}><IconBtn title="Edit" onClick={() => setModal({ editing: t })}>✏️</IconBtn><IconBtn title="Delete" danger onClick={() => removeTask(t.id)}>🗑️</IconBtn></div>
+      </div>
+    );
+  };
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
+        <div><h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 2px' }}>Tasks</h1><p style={{ color: SLATE, fontSize: 13, margin: 0 }}>{pending.length} pending</p></div>
+        <PrimaryBtn onClick={() => setModal({ editing: null })}>➕ Add task</PrimaryBtn>
+      </div>
+      <div style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, overflow: 'hidden', marginBottom: 16 }}>
+        <div style={{ padding: '8px 14px', background: CARD_HI, fontSize: 11, fontWeight: 700, color: SLATE, textTransform: 'uppercase' }}>Pending</div>
+        {pending.length === 0 && <div style={{ padding: 16, color: MUTED, fontSize: 13 }}>All done 🎉</div>}
+        {pending.map(t => <Row key={t.id} t={t} />)}
+      </div>
+      {done.length > 0 && <div style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, overflow: 'hidden' }}>
+        <div style={{ padding: '8px 14px', background: CARD_HI, fontSize: 11, fontWeight: 700, color: SLATE, textTransform: 'uppercase' }}>Completed</div>
+        {done.map(t => <Row key={t.id} t={t} />)}
+      </div>}
+      {modal && <Modal title={modal.editing ? 'Edit task' : 'Add task'} onClose={() => setModal(null)}>
+        <TaskForm data={data} initial={modal.editing} onSave={saveTask} onCancel={() => setModal(null)} saving={saving} />
+      </Modal>}
+    </div>
+  );
+}
+function TaskForm({ data, initial, onSave, onCancel, saving }) {
+  const [f, setF] = useState(initial || { title: '', dueDate: todayISO(), contactId: '' });
+  const set = k => e => setF({ ...f, [k]: e.target.value });
+  return (
+    <div>
+      <Field label="Task"><input style={inputStyle} value={f.title} onChange={set('title')} placeholder="e.g. Call client" /></Field>
+      <div style={{ display: 'flex', gap: 10 }}><div style={{ flex: 1 }}><Field label="Due date"><input type="date" style={inputStyle} value={f.dueDate} onChange={set('dueDate')} /></Field></div><div style={{ flex: 1 }}><Field label="Contact"><select style={inputStyle} value={f.contactId} onChange={set('contactId')}><option value="">None</option>{data.contacts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field></div></div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}><GhostBtn onClick={onCancel}>Cancel</GhostBtn><PrimaryBtn disabled={saving} onClick={() => f.title.trim() && onSave(f)}>{saving ? 'Saving…' : 'Save'}</PrimaryBtn></div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  ANALYTICS
+// ─────────────────────────────────────────────────────────────
+function Analytics({ data }) {
+  const totalLeads = data.contacts.length;
+  const byStatus = LEAD_STATUSES.map(s => ({ status: s, count: data.contacts.filter(c => c.status === s).length }));
+  const bySource = SOURCES.map(s => ({ source: s, count: data.contacts.filter(c => c.source === s).length })).filter(x => x.count > 0);
+  const totalDeals = data.deals.length;
+  const wonDeals = data.deals.filter(d => d.stage === 'Closed Won').length;
+  const totalValue = data.deals.reduce((s, d) => s + Number(d.value || 0), 0);
+  const avgDeal = totalDeals ? totalValue / totalDeals : 0;
+  return (
+    <div>
+      <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 16px' }}>Analytics</h1>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
+        <StatCard label="Total leads" value={totalLeads} />
+        <StatCard label="Deals won" value={wonDeals} accent={JADE} />
+        <StatCard label="Total pipeline value" value={money(totalValue)} accent={GOLD} />
+        <StatCard label="Avg deal size" value={money(avgDeal)} accent={SKY} />
+      </div>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 200, background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, marginBottom: 10, color: INK }}>Lead status</div>
+          {byStatus.map(({ status, count }) => (
+            <div key={status} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderTop: `1px solid ${LINE}` }}>
+              <span style={{ fontSize: 13, color: SLATE }}>{status}</span>
+              <span style={{ fontWeight: 600, color: INK }}>{count}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ flex: 1, minWidth: 200, background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, marginBottom: 10, color: INK }}>Top sources</div>
+          {bySource.length === 0 && <div style={{ fontSize: 12.5, color: MUTED }}>No data yet.</div>}
+          {bySource.map(({ source, count }) => (
+            <div key={source} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderTop: `1px solid ${LINE}` }}>
+              <span style={{ fontSize: 13, color: SLATE }}>{source}</span>
+              <span style={{ fontWeight: 600, color: INK }}>{count}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ flex: 1, minWidth: 200, background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, marginBottom: 10, color: INK }}>Pipeline stages</div>
+          {DEAL_STAGES.map(stage => {
+            const count = data.deals.filter(d => d.stage === stage).length;
+            return (
+              <div key={stage} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderTop: `1px solid ${LINE}` }}>
+                <span style={{ fontSize: 13, color: SLATE }}>{stage}</span>
+                <span style={{ fontWeight: 600, color: INK }}>{count}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  MESSAGES — activity feed / notification center
+// ─────────────────────────────────────────────────────────────
+const ACTIVITY_ICON = { lead: '👤', property: '🏠', deal: '📌', task: '✅', system: '🔔' };
+
+function timeAgo(iso) {
+  if (!iso) return '';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function Messages({ data, actions }) {
+  const contactName = id => data.contacts.find(c => c.id === id)?.name;
+  const activities = data.activities || [];
+  const unread = activities.filter(a => !a.read);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 2px' }}>Messages</h1>
+          <p style={{ color: SLATE, fontSize: 13, margin: 0 }}>{unread.length ? `${unread.length} unread` : 'All caught up'}</p>
+        </div>
+        {unread.length > 0 && <GhostBtn onClick={() => actions.markAllActivitiesRead()}>Mark all as read</GhostBtn>}
+      </div>
+      <div style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, overflow: 'hidden' }}>
+        {activities.length === 0 && (
+          <div style={{ padding: 28, textAlign: 'center', color: MUTED, fontSize: 13.5 }}>
+            No messages yet. Activity like new leads, deal updates, and completed tasks will show up here.
+          </div>
+        )}
+        {activities.map(a => (
+          <div key={a.id} onClick={() => !a.read && actions.markActivityRead(a.id)} style={{
+            display: 'flex', alignItems: 'flex-start', gap: 12, padding: '13px 16px', borderTop: `1px solid ${LINE}`,
+            background: a.read ? 'transparent' : JADE_LIGHT, cursor: a.read ? 'default' : 'pointer', transition: '0.15s',
+          }}>
+            <div style={{ fontSize: 18, marginTop: 1 }}>{ACTIVITY_ICON[a.type] || '🔔'}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, color: INK, fontWeight: a.read ? 500 : 700 }}>{a.message}</div>
+              <div style={{ fontSize: 11, color: SLATE, marginTop: 2 }}>
+                {timeAgo(a.createdAt)}{contactName(a.contactId) ? ` · ${contactName(a.contactId)}` : ''}
+              </div>
+            </div>
+            {!a.read && <span style={{ width: 8, height: 8, borderRadius: '50%', background: JADE, flexShrink: 0, marginTop: 6 }} />}
+            <IconBtn title="Delete" danger onClick={(e) => { e.stopPropagation(); actions.deleteActivity(a.id); }}>🗑️</IconBtn>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NotificationBell({ unreadCount, onOpen }) {
+  return (
+    <button onClick={onOpen} title="Messages" style={{
+      position: 'relative', background: CARD, border: `1px solid ${LINE}`, borderRadius: 9, width: 36, height: 36,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: SLATE, fontSize: 16,
+    }}>
+      🔔
+      {unreadCount > 0 && (
+        <span style={{
+          position: 'absolute', top: -4, right: -4, background: RUST, color: '#fff', fontSize: 9.5, fontWeight: 700,
+          borderRadius: 999, minWidth: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 3px',
+          border: `1.5px solid ${SURFACE}`,
+        }}>
+          {unreadCount > 9 ? '9+' : unreadCount}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PROFILE
+// ─────────────────────────────────────────────────────────────
+function Profile() {
+  const { user, setUser, token, logout } = useAuth();
+  const [form, setForm] = useState({ name: user?.name || '', agency: user?.agency || '' });
+  const [pwForm, setPwForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingPw, setSavingPw] = useState(false);
+  const [msg, setMsg] = useState(null); // { kind, text }
+
+  const set = k => e => setForm({ ...form, [k]: e.target.value });
+  const setPw = k => e => setPwForm({ ...pwForm, [k]: e.target.value });
+  const initials = (user?.name || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
+
+  const saveProfile = async (e) => {
+    e.preventDefault();
+    setMsg(null);
+    if (!form.name.trim()) return setMsg({ kind: 'error', text: 'Name is required.' });
+    setSavingProfile(true);
+    try {
+      const res = await api.updateProfile(token, form);
+      setUser(res.user);
+      setMsg({ kind: 'success', text: 'Profile updated.' });
+    } catch (err) {
+      setMsg({ kind: 'error', text: err.message });
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const savePassword = async (e) => {
+    e.preventDefault();
+    setMsg(null);
+    if (pwForm.newPassword.length < 6) return setMsg({ kind: 'error', text: 'New password must be at least 6 characters.' });
+    if (pwForm.newPassword !== pwForm.confirmPassword) return setMsg({ kind: 'error', text: 'New passwords do not match.' });
+    setSavingPw(true);
+    try {
+      await api.changePassword(token, { currentPassword: pwForm.currentPassword, newPassword: pwForm.newPassword });
+      setPwForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setMsg({ kind: 'success', text: 'Password changed.' });
+    } catch (err) {
+      setMsg({ kind: 'error', text: err.message });
+    } finally {
+      setSavingPw(false);
+    }
+  };
+
+  return (
+    <div>
+      <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 2px' }}>Profile</h1>
+      <p style={{ color: SLATE, fontSize: 13, margin: '0 0 20px' }}>Manage your account details and security.</p>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 22 }}>
+        <div style={{ width: 56, height: 56, borderRadius: '50%', background: `linear-gradient(135deg, ${GOLD}, ${GOLD_DARK})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 700, color: '#1a1305' }}>
+          {initials}
+        </div>
+        <div>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 18, fontWeight: 600, color: INK }}>{user?.name}</div>
+          <div style={{ fontSize: 12.5, color: SLATE }}>{user?.email}</div>
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>Member since {user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : '—'}</div>
+        </div>
+      </div>
+
+      {msg && (
+        <div style={{
+          background: msg.kind === 'error' ? RUST_LIGHT : JADE_LIGHT, color: msg.kind === 'error' ? RUST : JADE,
+          fontSize: 12.5, fontWeight: 600, borderRadius: 8, padding: '9px 12px', marginBottom: 16, maxWidth: 460,
+        }}>
+          {msg.text}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+        <form onSubmit={saveProfile} style={{ flex: '1 1 320px', background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 18, maxWidth: 420 }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, color: INK, marginBottom: 12 }}>Account details</div>
+          <Field label="Full name"><input style={inputStyle} value={form.name} onChange={set('name')} /></Field>
+          <Field label="Agency"><input style={inputStyle} value={form.agency} onChange={set('agency')} placeholder="e.g. Fahmin Realty" /></Field>
+          <Field label="Email"><input style={{ ...inputStyle, opacity: 0.6, cursor: 'not-allowed' }} value={user?.email || ''} disabled /></Field>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+            <PrimaryBtn disabled={savingProfile}>{savingProfile ? 'Saving…' : 'Save changes'}</PrimaryBtn>
+          </div>
+        </form>
+
+        <form onSubmit={savePassword} style={{ flex: '1 1 320px', background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 18, maxWidth: 420 }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, color: INK, marginBottom: 12 }}>Change password</div>
+          <Field label="Current password"><input type="password" style={inputStyle} value={pwForm.currentPassword} onChange={setPw('currentPassword')} /></Field>
+          <Field label="New password"><input type="password" style={inputStyle} value={pwForm.newPassword} onChange={setPw('newPassword')} /></Field>
+          <Field label="Confirm new password"><input type="password" style={inputStyle} value={pwForm.confirmPassword} onChange={setPw('confirmPassword')} /></Field>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+            <PrimaryBtn disabled={savingPw}>{savingPw ? 'Updating…' : 'Update password'}</PrimaryBtn>
+          </div>
+        </form>
+      </div>
+
+      <div style={{ marginTop: 20 }}>
+        <GhostBtn onClick={logout} style={{ color: RUST, borderColor: RUST + '55' }}>⏻ Sign out</GhostBtn>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  CALLS — scheduling & call log
+// ─────────────────────────────────────────────────────────────
+function ScheduleCallModal({ contacts, defaultContactId, onClose, onSave }) {
+  const [form, setForm] = useState({
+    contactId: defaultContactId || (contacts[0] ? contacts[0].id : ''),
+    phone: '', scheduledAt: '', notes: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const set = k => e => setForm({ ...form, [k]: e.target.value });
+
+  useEffect(() => {
+    const c = contacts.find(c => c.id === form.contactId);
+    if (c && !form.phone) setForm(f => ({ ...f, phone: c.phone || '' }));
+  }, [form.contactId]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.contactId) return;
+    setSaving(true);
+    try {
+      await onSave({ contactId: form.contactId, phone: form.phone, scheduledAt: form.scheduledAt, notes: form.notes });
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="Schedule a call" onClose={onClose}>
+      <form onSubmit={submit}>
+        <Field label="Lead">
+          <select style={inputStyle} value={form.contactId} onChange={set('contactId')}>
+            {contacts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Phone"><input style={inputStyle} value={form.phone} onChange={set('phone')} placeholder="03XX-XXXXXXX" /></Field>
+        <Field label="Date & time"><input type="datetime-local" style={inputStyle} value={form.scheduledAt} onChange={set('scheduledAt')} /></Field>
+        <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 70, resize: 'vertical' }} value={form.notes} onChange={set('notes')} placeholder="Call objective…" /></Field>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
+          <GhostBtn onClick={onClose}>Cancel</GhostBtn>
+          <PrimaryBtn disabled={saving || !form.contactId}>{saving ? 'Saving…' : 'Save'}</PrimaryBtn>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function Calls({ data, actions }) {
+  const [showModal, setShowModal] = useState(false);
+  const contactName = (id) => data.contacts.find(c => c.id === id)?.name || 'Unknown lead';
+  const today = todayISO();
+  const calls = data.calls || [];
+  const completedToday = calls.filter(c => c.status === 'completed' && (c.scheduledAt || '').slice(0, 10) === today).length;
+  const pending = calls.filter(c => c.status === 'pending');
+  const nextCalls = [...pending].sort((a, b) => (a.scheduledAt || '').localeCompare(b.scheduledAt || ''));
+
+  const complete = (call) => actions.updateCall(call.id, { status: 'completed' });
+  const remove = (call) => actions.deleteCall(call.id);
+
+  return (
+    <div>
+      <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 2px' }}>Calls</h1>
+      <p style={{ color: SLATE, fontSize: 13, margin: '0 0 20px' }}>Communication center — schedule and track lead calls.</p>
+
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+        <StatCard label="Today" value={completedToday} sub="Calls completed" />
+        <StatCard label="Pending" value={pending.length} sub="Follow-up calls" accent={GOLD} />
+        <StatCard label="Total" value={calls.length} sub="Calls in CRM" accent={SKY} />
+      </div>
+
+      <div style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4 }}>Firestore call queue</div>
+            <div style={{ fontFamily: 'Fraunces, serif', fontSize: 17, fontWeight: 600, color: INK }}>Next calls</div>
+          </div>
+          <PrimaryBtn onClick={() => setShowModal(true)}>+ Schedule call</PrimaryBtn>
+        </div>
+        {nextCalls.length === 0 && <div style={{ fontSize: 12.5, color: MUTED, padding: '10px 0' }}>No calls scheduled. You're all caught up.</div>}
+        {nextCalls.map(call => (
+          <div key={call.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderTop: `1px solid ${LINE}` }}>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: INK }}>{contactName(call.contactId)}</div>
+              <div style={{ fontSize: 11.5, color: SLATE }}>{call.scheduledAt ? new Date(call.scheduledAt).toLocaleString() : 'No time set'}{call.notes ? ' · ' + call.notes : ''}</div>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <PrimaryBtn onClick={() => complete(call)} style={{ padding: '7px 12px', fontSize: 12.5 }}>Complete</PrimaryBtn>
+              <IconBtn onClick={() => remove(call)} title="Delete" danger>✕</IconBtn>
+            </div>
+          </div>
+        ))}
+
+        {calls.some(c => c.status === 'completed') && (
+          <>
+            <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 18, marginBottom: 8 }}>Completed</div>
+            {calls.filter(c => c.status === 'completed').slice(-6).reverse().map(call => (
+              <div key={call.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderTop: `1px solid ${LINE}` }}>
+                <div style={{ fontSize: 12.5, color: SLATE }}>{contactName(call.contactId)}</div>
+                <Badge text="Completed" bg={JADE_LIGHT} fg={JADE} />
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      {showModal && (
+        <ScheduleCallModal
+          contacts={data.contacts}
+          onClose={() => setShowModal(false)}
+          onSave={(body) => actions.createCall(body)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  INBOX — unified per-lead conversation threads
+// ─────────────────────────────────────────────────────────────
+function Inbox({ data, actions }) {
+  const { token } = useAuth();
+  const conversations = data.conversations || [];
+  const [selected, setSelected] = useState(conversations[0]?.contactId || null);
+  const [messages, setMessages] = useState([]);
+  const [loadingThread, setLoadingThread] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const scrollRef = useRef(null);
+
+  const contactName = (id) => data.contacts.find(c => c.id === id)?.name || conversations.find(c => c.contactId === id)?.contactName || 'Lead';
+
+  const openThread = async (contactId) => {
+    setSelected(contactId);
+    setLoadingThread(true);
+    try {
+      const rows = await api.thread(token, contactId);
+      setMessages(rows);
+    } catch (e) { /* toast handled at data-load level; keep thread empty on failure */ }
+    finally { setLoadingThread(false); }
+    actions.refreshConversations();
+  };
+
+  useEffect(() => { if (selected) openThread(selected); }, []);
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
+
+  const send = async (e) => {
+    e.preventDefault();
+    if (!draft.trim() || !selected) return;
+    setSending(true);
+    try {
+      const msg = await api.sendMessage(token, selected, { body: draft.trim() });
+      setMessages(m => [...m, msg]);
+      setDraft('');
+      actions.refreshConversations();
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div>
+      <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 2px' }}>Inbox</h1>
+      <p style={{ color: SLATE, fontSize: 13, margin: '0 0 16px' }}>Unified conversations with your leads.</p>
+
+      <div style={{ display: 'flex', border: `1px solid ${LINE}`, borderRadius: 12, overflow: 'hidden', height: 480, background: CARD }}>
+        <div style={{ width: 230, borderRight: `1px solid ${LINE}`, overflowY: 'auto', flexShrink: 0 }}>
+          {conversations.length === 0 && <div style={{ fontSize: 12, color: MUTED, padding: 16 }}>No conversations yet.</div>}
+          {conversations.map(c => (
+            <button key={c.contactId} onClick={() => openThread(c.contactId)} style={{
+              display: 'block', width: '100%', textAlign: 'left', background: selected === c.contactId ? JADE_LIGHT : 'transparent',
+              border: 'none', borderBottom: `1px solid ${LINE}`, padding: '11px 14px', cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: selected === c.contactId ? JADE : INK }}>{c.contactName}</span>
+                {!!c.unread && <span style={{ background: RUST, color: '#fff', fontSize: 9.5, fontWeight: 700, borderRadius: 999, minWidth: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 3px' }}>{c.unread}</span>}
+              </div>
+              <div style={{ fontSize: 11.5, color: SLATE, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 2 }}>{c.lastMessage}</div>
+            </button>
+          ))}
+        </div>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          {!selected && <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: MUTED, fontSize: 13 }}>Select a conversation</div>}
+          {selected && (
+            <>
+              <div style={{ padding: '12px 16px', borderBottom: `1px solid ${LINE}` }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{contactName(selected)}</div>
+                <div style={{ fontSize: 11, color: SLATE }}>WhatsApp conversation</div>
+              </div>
+              <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {loadingThread && <div style={{ fontSize: 12, color: MUTED }}>Loading…</div>}
+                {!loadingThread && messages.length === 0 && <div style={{ fontSize: 12, color: MUTED }}>No messages yet — say hello.</div>}
+                {messages.map(m => (
+                  <div key={m.id} style={{
+                    maxWidth: '70%', alignSelf: m.sender === 'agent' ? 'flex-end' : 'flex-start',
+                    background: m.sender === 'agent' ? `linear-gradient(135deg, ${JADE}, ${JADE_DARK})` : SURFACE,
+                    color: m.sender === 'agent' ? '#08150f' : INK,
+                    border: m.sender === 'agent' ? 'none' : `1px solid ${LINE}`,
+                    borderRadius: 12, padding: '8px 12px', fontSize: 13,
+                  }}>
+                    {m.body}
+                  </div>
+                ))}
+              </div>
+              <form onSubmit={send} style={{ display: 'flex', gap: 8, padding: 12, borderTop: `1px solid ${LINE}` }}>
+                <input style={{ ...inputStyle, flex: 1 }} placeholder="Write a message…" value={draft} onChange={e => setDraft(e.target.value)} />
+                <PrimaryBtn disabled={sending || !draft.trim()}>Send</PrimaryBtn>
+              </form>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  AI ASSISTANT — real Claude-powered sales copilot
+// ─────────────────────────────────────────────────────────────
+const ASSISTANT_QUICK_ACTIONS = [
+  { icon: '🔥', label: 'Hot leads', prompt: 'Which leads need contact today, and why should I prioritize them?' },
+  { icon: '✍️', label: 'Draft follow-ups', prompt: 'Draft a short follow-up message for my most important lead right now.' },
+  { icon: '📊', label: 'Pipeline summary', prompt: 'Summarize my pipeline — what stage is everything in, and what needs attention?' },
+  { icon: '📵', label: 'Missed contacts', prompt: 'Which leads or tasks have I been neglecting?' },
+];
+
+function AIAssistant({ data }) {
+  const { token } = useAuth();
+  const [messages, setMessages] = useState([
+    { role: 'assistant', text: "Good afternoon! I can analyze your leads, prepare follow-ups, prioritize hot prospects and draft client messages." },
+  ]);
+  const [input, setInput] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState(null);
+  const scrollRef = useRef(null);
+
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages, asking]);
+
+  const ask = async (text) => {
+    const question = (text ?? input).trim();
+    if (!question || asking) return;
+    setError(null);
+    setMessages(m => [...m, { role: 'user', text: question }]);
+    setInput('');
+    setAsking(true);
+    try {
+      const res = await api.askAssistant(token, question);
+      setMessages(m => [...m, { role: 'assistant', text: res.reply }]);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  const submit = (e) => { e.preventDefault(); ask(); };
+
+  return (
+    <div>
+      <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 2px' }}>AI Assistant</h1>
+      <p style={{ color: SLATE, fontSize: 13, margin: '0 0 16px' }}>Your AI sales copilot — grounded in your live CRM data.</p>
+
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: '2 1 380px', background: '#0a1310', border: `1px solid ${LINE}`, borderRadius: 12, display: 'flex', flexDirection: 'column', height: 480 }}>
+          <div style={{ padding: '12px 16px', borderBottom: `1px solid ${LINE}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4 }}>Estate intelligence</div>
+              <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, color: INK }}>AI Sales Copilot</div>
+            </div>
+            <Badge text="Online" bg={JADE_LIGHT} fg={JADE} />
+          </div>
+          <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {messages.map((m, i) => (
+              <div key={i} style={{
+                maxWidth: '85%', alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                background: m.role === 'user' ? `linear-gradient(135deg, ${JADE}, ${JADE_DARK})` : CARD,
+                color: m.role === 'user' ? '#08150f' : INK,
+                border: m.role === 'user' ? 'none' : `1px solid ${LINE}`,
+                borderRadius: 12, padding: '9px 13px', fontSize: 13, whiteSpace: 'pre-wrap', lineHeight: 1.45,
+              }}>
+                {m.text}
+              </div>
+            ))}
+            {asking && <div style={{ fontSize: 12, color: MUTED, alignSelf: 'flex-start' }}>Thinking…</div>}
+            {error && (
+              <div style={{ fontSize: 12, color: RUST, background: RUST_LIGHT, borderRadius: 8, padding: '8px 12px', alignSelf: 'flex-start', maxWidth: '90%' }}>{error}</div>
+            )}
+            {messages.length === 1 && (
+              <div style={{ fontSize: 12, color: MUTED }}>Try: "Which leads need contact today?"</div>
+            )}
+          </div>
+          <form onSubmit={submit} style={{ display: 'flex', gap: 8, padding: 12, borderTop: `1px solid ${LINE}` }}>
+            <input style={{ ...inputStyle, flex: 1 }} placeholder="Ask your CRM assistant…" value={input} onChange={e => setInput(e.target.value)} />
+            <PrimaryBtn disabled={asking || !input.trim()}>Ask</PrimaryBtn>
+          </form>
+        </div>
+
+        <div style={{ flex: '1 1 220px', minWidth: 220 }}>
+          <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>Quick actions</div>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 600, color: INK, marginBottom: 10 }}>Automate the next move</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {ASSISTANT_QUICK_ACTIONS.map(a => (
+              <button key={a.label} onClick={() => ask(a.prompt)} disabled={asking} style={{
+                display: 'flex', alignItems: 'center', gap: 8, background: CARD, border: `1px solid ${LINE}`, borderRadius: 9,
+                padding: '10px 12px', fontSize: 13, fontWeight: 600, color: INK, cursor: asking ? 'default' : 'pointer', textAlign: 'left', fontFamily: 'Inter, sans-serif',
+              }}>
+                <span>{a.icon}</span><span>{a.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SETTINGS — workspace, preferences & automation
+// ─────────────────────────────────────────────────────────────
+function ToggleSwitch({ on, onChange }) {
+  return (
+    <button type="button" onClick={() => onChange(!on)} style={{
+      width: 40, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', position: 'relative',
+      background: on ? `linear-gradient(135deg, ${JADE}, ${JADE_DARK})` : LINE, transition: '0.15s', flexShrink: 0,
+    }}>
+      <span style={{
+        position: 'absolute', top: 3, left: on ? 20 : 3, width: 16, height: 16, borderRadius: '50%',
+        background: '#fff', transition: '0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+      }} />
+    </button>
+  );
+}
+
+const SettingsRow = ({ label, children }) => (
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderTop: `1px solid ${LINE}` }}>
+    <span style={{ fontSize: 13, color: INK, fontWeight: 500 }}>{label}</span>
+    {children}
+  </div>
+);
+
+function Settings({ data }) {
+  const { token } = useAuth();
+  const [form, setForm] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  useEffect(() => {
+    api.getSettings(token).then(setForm).catch((err) => setMsg({ kind: 'error', text: err.message }));
+  }, [token]);
+
+  if (!form) return <div style={{ color: MUTED, fontSize: 13 }}>Loading settings…</div>;
+
+  const setField = (k) => (v) => setForm(f => ({ ...f, [k]: v }));
+
+  const save = async () => {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const updated = await api.updateSettings(token, form);
+      setForm(updated);
+      setMsg({ kind: 'success', text: 'Settings saved.' });
+    } catch (err) {
+      setMsg({ kind: 'error', text: err.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 24, fontWeight: 600, color: INK, margin: '0 0 2px' }}>Settings</h1>
+      <p style={{ color: SLATE, fontSize: 13, margin: '0 0 20px' }}>Workspace controls, preferences and automation.</p>
+
+      {msg && (
+        <div style={{
+          background: msg.kind === 'error' ? RUST_LIGHT : JADE_LIGHT, color: msg.kind === 'error' ? RUST : JADE,
+          fontSize: 12.5, fontWeight: 600, borderRadius: 8, padding: '9px 12px', marginBottom: 16, maxWidth: 460,
+        }}>
+          {msg.text}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 320px', background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 18, maxWidth: 420 }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, color: INK, marginBottom: 12 }}>Workspace</div>
+          <Field label="Workspace name"><input style={inputStyle} value={form.workspaceName || ''} onChange={e => setField('workspaceName')(e.target.value)} /></Field>
+          <Field label="Currency">
+            <select style={inputStyle} value={form.currency} onChange={e => setField('currency')(e.target.value)}>
+              <option value="PKR">PKR — Rs</option>
+              <option value="USD">USD — $</option>
+              <option value="AED">AED — د.إ</option>
+            </select>
+          </Field>
+          <Field label="Timezone">
+            <select style={inputStyle} value={form.timezone} onChange={e => setField('timezone')(e.target.value)}>
+              <option value="Asia/Karachi">Pakistan Standard Time</option>
+              <option value="Asia/Dubai">Gulf Standard Time</option>
+              <option value="UTC">UTC</option>
+            </select>
+          </Field>
+        </div>
+
+        <div style={{ flex: '1 1 320px', background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 18, maxWidth: 420 }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, color: INK, marginBottom: 4 }}>Preferences</div>
+          <SettingsRow label="Desktop notifications"><ToggleSwitch on={form.desktopNotifications} onChange={setField('desktopNotifications')} /></SettingsRow>
+          <SettingsRow label="Follow-up reminders"><ToggleSwitch on={form.followupReminders} onChange={setField('followupReminders')} /></SettingsRow>
+          <SettingsRow label="Compact cards"><ToggleSwitch on={form.compactCards} onChange={setField('compactCards')} /></SettingsRow>
+        </div>
+
+        <div style={{ flex: '1 1 320px', background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: 18, maxWidth: 420 }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, fontWeight: 600, color: INK, marginBottom: 4 }}>Automation</div>
+          <SettingsRow label="Hot lead alerts"><ToggleSwitch on={form.hotLeadAlerts} onChange={setField('hotLeadAlerts')} /></SettingsRow>
+          <SettingsRow label="Missed-contact alerts"><ToggleSwitch on={form.missedContactAlerts} onChange={setField('missedContactAlerts')} /></SettingsRow>
+          <SettingsRow label="AI assistant"><ToggleSwitch on={form.aiAssistantEnabled} onChange={setField('aiAssistantEnabled')} /></SettingsRow>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+            <PrimaryBtn onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</PrimaryBtn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  DATA HOOK — fetches from the API and exposes CRUD actions
+// ─────────────────────────────────────────────────────────────
+function useCrmData(token) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState(null);
+
+  const load = useCallback(() => {
+    if (!token) return;
+    setLoading(true);
+    api.all(token)
+      .then(setData)
+      .catch((err) => setToast({ message: err.message, kind: 'error' }))
+      .finally(() => setLoading(false));
+  }, [token]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const wrap = (fn) => async (...args) => {
+    try {
+      return await fn(...args);
+    } catch (err) {
+      setToast({ message: err.message || 'Something went wrong', kind: 'error' });
+      throw err;
+    }
+  };
+
+  const refreshActivities = async () => {
+    try {
+      const activities = await api.activities(token);
+      setData(d => (d ? { ...d, activities } : d));
+    } catch (e) { /* non-critical */ }
+  };
+
+  const actions = {
+    createContact: wrap(async (body) => { const c = await api.createContact(token, body); setData(d => ({ ...d, contacts: [...d.contacts, c] })); await refreshActivities(); }),
+    updateContact: wrap(async (id, body) => { const c = await api.updateContact(token, id, body); setData(d => ({ ...d, contacts: d.contacts.map(x => x.id === id ? c : x) })); }),
+    deleteContact: wrap(async (id) => { await api.deleteContact(token, id); setData(d => ({ ...d, contacts: d.contacts.filter(x => x.id !== id), deals: d.deals.filter(x => x.contactId !== id), tasks: d.tasks.filter(x => x.contactId !== id) })); }),
+    createProperty: wrap(async (body) => { const p = await api.createProperty(token, body); setData(d => ({ ...d, properties: [...d.properties, p] })); await refreshActivities(); }),
+    updateProperty: wrap(async (id, body) => { const p = await api.updateProperty(token, id, body); setData(d => ({ ...d, properties: d.properties.map(x => x.id === id ? p : x) })); }),
+    deleteProperty: wrap(async (id) => { await api.deleteProperty(token, id); setData(d => ({ ...d, properties: d.properties.filter(x => x.id !== id), deals: d.deals.filter(x => x.propertyId !== id) })); }),
+    createDeal: wrap(async (body) => { const deal = await api.createDeal(token, body); setData(d => ({ ...d, deals: [...d.deals, deal] })); await refreshActivities(); }),
+    updateDeal: wrap(async (id, body) => { const deal = await api.updateDeal(token, id, body); setData(d => ({ ...d, deals: d.deals.map(x => x.id === id ? deal : x) })); if (body.stage) await refreshActivities(); }),
+    deleteDeal: wrap(async (id) => { await api.deleteDeal(token, id); setData(d => ({ ...d, deals: d.deals.filter(x => x.id !== id) })); }),
+    createTask: wrap(async (body) => { const t = await api.createTask(token, body); setData(d => ({ ...d, tasks: [...d.tasks, t] })); }),
+    updateTask: wrap(async (id, body) => { const t = await api.updateTask(token, id, body); setData(d => ({ ...d, tasks: d.tasks.map(x => x.id === id ? t : x) })); if (body.done) await refreshActivities(); }),
+    deleteTask: wrap(async (id) => { await api.deleteTask(token, id); setData(d => ({ ...d, tasks: d.tasks.filter(x => x.id !== id) })); }),
+    markActivityRead: wrap(async (id) => { const a = await api.markActivityRead(token, id); setData(d => ({ ...d, activities: d.activities.map(x => x.id === id ? a : x) })); }),
+    markAllActivitiesRead: wrap(async () => { await api.markAllActivitiesRead(token); setData(d => ({ ...d, activities: d.activities.map(x => ({ ...x, read: true })) })); }),
+    deleteActivity: wrap(async (id) => { await api.deleteActivity(token, id); setData(d => ({ ...d, activities: d.activities.filter(x => x.id !== id) })); }),
+    createCall: wrap(async (body) => { const c = await api.createCall(token, body); setData(d => ({ ...d, calls: [...d.calls, c] })); }),
+    updateCall: wrap(async (id, body) => { const c = await api.updateCall(token, id, body); setData(d => ({ ...d, calls: d.calls.map(x => x.id === id ? c : x) })); }),
+    deleteCall: wrap(async (id) => { await api.deleteCall(token, id); setData(d => ({ ...d, calls: d.calls.filter(x => x.id !== id) })); }),
+    refreshConversations: wrap(async () => { const conversations = await api.conversations(token); setData(d => (d ? { ...d, conversations } : d)); }),
+  };
+
+  return { data, loading, actions, toast, clearToast: () => setToast(null) };
+}
+
+// ─────────────────────────────────────────────────────────────
+//  CRM SHELL — rendered once authenticated
+// ─────────────────────────────────────────────────────────────
+function CrmShell() {
+  const { token } = useAuth();
+  const { data, loading, actions, toast, clearToast } = useCrmData(token);
+  const [view, setView] = useState('dashboard');
+
+  if (loading || !data) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', color: SLATE, fontFamily: 'Inter, sans-serif' }}>
+        Loading your workspace…
+      </div>
+    );
+  }
+
+  const unreadCount = (data.activities || []).filter(a => !a.read).length;
+  const inboxUnread = (data.conversations || []).reduce((s, c) => s + (c.unread || 0), 0);
+
+  return (
+    <div style={{ fontFamily: 'Inter, sans-serif', display: 'flex', minHeight: 640, background: SURFACE, borderRadius: 16, overflow: 'hidden', border: `1px solid ${LINE}`, boxShadow: '0 30px 80px rgba(0,0,0,0.35)' }}>
+      <Sidebar view={view} setView={setView} unreadCount={unreadCount} inboxUnread={inboxUnread} />
+      <div style={{ flex: 1, padding: '22px 28px', overflowX: 'hidden' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
+          <NotificationBell unreadCount={unreadCount} onOpen={() => setView('messages')} />
+        </div>
+        {view === 'dashboard' && <Dashboard data={data} setView={setView} />}
+        {view === 'leads' && <Leads data={data} actions={actions} />}
+        {view === 'properties' && <Properties data={data} actions={actions} />}
+        {view === 'pipeline' && <Pipeline data={data} actions={actions} />}
+        {view === 'tasks' && <Tasks data={data} actions={actions} />}
+        {view === 'analytics' && <Analytics data={data} />}
+        {view === 'messages' && <Messages data={data} actions={actions} />}
+        {view === 'calls' && <Calls data={data} actions={actions} />}
+        {view === 'inbox' && <Inbox data={data} actions={actions} />}
+        {view === 'assistant' && <AIAssistant data={data} />}
+        {view === 'settings' && <Settings data={data} />}
+        {view === 'profile' && <Profile />}
+      </div>
+      <Toast message={toast?.message} kind={toast?.kind} onClose={clearToast} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  APP — gates on auth state
+// ─────────────────────────────────────────────────────────────
+function App() {
+  const { token, user, checking } = useAuth();
+
+  if (checking) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', color: SLATE, fontFamily: 'Inter, sans-serif' }}>
+        Loading…
+      </div>
+    );
+  }
+  if (!token || !user) return <AuthScreen />;
+  return <CrmShell />;
+}
+
+function Root() {
+  return (
+    <AuthProvider>
+      <App />
+    </AuthProvider>
+  );
+}
+
+</script>
+
+<script>
+  var src = document.getElementById('app-source').textContent;
+  var compiled = Babel.transform(src, { presets: [['react', { runtime: 'classic' }]] }).code;
+  (0, eval)(compiled);
+  ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Root));
+</script>
+</body>
+</html>
